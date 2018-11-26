@@ -1,0 +1,42 @@
+port <%= @port %>
+proto <%= @proto %>
+
+dev tun
+
+ca <%= @ca %>
+cert <%= @cert %>
+key <%= @key %>  # This file should be kept secret
+
+dh <%= @dh %>
+
+topology subnet
+
+server <%= @network.to_addr %> <%= @network.netmask.to_s %>
+
+ifconfig-pool-persist <%= @ipp_file %>
+
+client-config-dir <%= @client_dir %>
+
+client-to-client
+
+keepalive 10 120
+
+tls-auth <%= @ta_key %> 0 # This file is secret
+key-direction 0
+
+cipher <%= @cipher %>
+auth <%= @auth %>
+
+user nobody
+group nogroup
+
+persist-key
+persist-tun
+
+status <%= @status_file %>
+
+verb 4
+
+<% if @proto == 'udp' %>
+explicit-exit-notify 1
+<% end %>
