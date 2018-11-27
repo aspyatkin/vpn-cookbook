@@ -5,20 +5,17 @@ property :basedir, String, default: '/etc/chef-vpn'
 property :user, String, required: true
 property :group, String, required: true
 
-property :cert_country, String, required: true
-property :cert_province, String, required: true
-property :cert_city, String, required: true
-property :cert_org, String, required: true
-property :cert_email, String, required: true
-property :cert_ou, String, required: true
+property :certificate, Hash, default: {}
 
-property :cert_key_size, Integer, default: 2048
+property :key_size, Integer, default: 2048
 
-property :openvpn_port, Integer, default: 1194
-property :openvpn_proto, String, default: 'tcp'
-property :openvpn_cipher, String, default: 'AES-128-CBC'
-property :openvpn_auth, String, default: 'SHA256'
-property :openvpn_network, String, required: true
+property :fqdn, [String, NilClass], default: nil
+property :port, Integer, default: 1194
+property :network, String, required: true
+property :openvpn, Hash, default: {}
+
+property :manage_firewall_rules, [TrueClass, FalseClass], default: false
+property :firewall_filter_rule_position, Integer, default: 50
 
 default_action :setup
 
@@ -42,36 +39,46 @@ action :setup do
     action :create
   end
 
-  ca_dir = ::File.join(new_resource.basedir, new_resource.name)
+  server_basedir = ::File.join(new_resource.basedir, 'server')
 
-  execute "create CA directory at #{ca_dir}" do
-    command "make-cadir #{ca_dir}"
+  directory server_basedir do
+    owner new_resource.user
+    group new_resource.group
+    mode 0755
+    action :create
+  end
+
+  ca_dir_path = ::File.join(server_basedir, new_resource.name)
+
+  execute "create CA directory at #{ca_dir_path}" do
+    command "make-cadir #{ca_dir_path}"
     user new_resource.user
     group new_resource.group
     action :run
-    not_if { ::File.directory?(ca_dir) }
+    not_if { ::File.directory?(ca_dir_path) }
   end
 
-  server_key_dir = 'keys'
-  server_key_name = 'server'
+  key_dir_name = 'keys'
+  key_name = 'server'
 
+  crt_details = new_resource.certificate
   defaults = {
-    'KEY_COUNTRY' => new_resource.cert_country,
-    'KEY_PROVINCE' => new_resource.cert_province,
-    'KEY_CITY' => new_resource.cert_city,
-    'KEY_ORG' => new_resource.cert_org,
-    'KEY_EMAIL' => new_resource.cert_email,
-    'KEY_OU' => new_resource.cert_ou,
-    'KEY_NAME' => server_key_name,
-    'KEY_DIR' => "$EASY_RSA/#{server_key_dir}",
-    'KEY_SIZE' => new_resource.cert_key_size
+    'KEY_COUNTRY' => crt_details.fetch(:country, 'US'),
+    'KEY_PROVINCE' => crt_details.fetch(:province, 'California'),
+    'KEY_CITY' => crt_details.fetch(:city, 'San Francisco'),
+    'KEY_ORG' => crt_details.fetch(:org, 'Acme Inc.'),
+    'KEY_EMAIL' => crt_details.fetch(:email, ''),
+    'KEY_OU' => crt_details.fetch(:ou, ''),
+    'KEY_NAME' => key_name,
+    'KEY_DIR' => "$EASY_RSA/#{key_dir_name}",
+    'KEY_SIZE' => new_resource.key_size
   }
 
-  vars_file = ::File.join(ca_dir, 'vars')
+  vars_file_path = ::File.join(ca_dir_path, 'vars')
 
   defaults.each do |key, val|
-    replace_or_add "adjust #{key} in #{vars_file}" do
-      path vars_file
+    replace_or_add "adjust #{key} in #{vars_file_path}" do
+      path vars_file_path
       pattern ::Regexp.new("^export #{key}=.*$")
       line "export #{key}=#{val.kind_of?(::Numeric) ? val.to_s : val.dump}"
       replace_only true
@@ -81,20 +88,20 @@ action :setup do
   end
 
   if node['platform'] == 'ubuntu' && node['platform_version'].to_f >= 18.04
-    execute "Fix openssl.cnf at #{ca_dir}" do
-      cwd ca_dir
+    execute "Fix openssl.cnf at #{ca_dir_path}" do
+      cwd ca_dir_path
       command 'cp ./openssl-1.0.0.cnf ./openssl.cnf'
       user new_resource.user
       group new_resource.group
       action :run
-      not_if { ::File.exist?(::File.join(ca_dir, 'openssl.cnf')) }
+      not_if { ::File.exist?(::File.join(ca_dir_path, 'openssl.cnf')) }
     end
   end
 
-  key_dir = ::File.join(ca_dir, server_key_dir)
+  key_dir_path = ::File.join(ca_dir_path, key_dir_name)
 
-  bash "clean CA key directory at #{ca_dir}" do
-    cwd ca_dir
+  bash "clean CA key directory at #{ca_dir_path}" do
+    cwd ca_dir_path
     code <<-EOH
       source ./vars
       ./clean-all
@@ -102,14 +109,17 @@ action :setup do
     user instance.user
     group instance.group
     action :run
-    not_if { ::Dir.exist?(key_dir) && !::Dir.empty?(key_dir) }
+    not_if { ::Dir.exist?(key_dir_path) && !::Dir.empty?(key_dir_path) }
   end
 
-  ca_crt_file = ::File.join(key_dir, 'ca.crt')
-  ca_key_file = ::File.join(key_dir, 'ca.key')
+  ca_crt_file_name = 'ca.crt'
+  ca_key_file_name = 'ca.key'
 
-  bash "initialize CA at #{ca_dir}" do
-    cwd ca_dir
+  ca_crt_file_path = ::File.join(key_dir_path, ca_crt_file_name)
+  ca_key_file_path = ::File.join(key_dir_path, ca_key_file_name)
+
+  bash "initialize CA at #{ca_dir_path}" do
+    cwd ca_dir_path
     code <<-EOH
       source ./vars
       ./build-ca --batch
@@ -117,28 +127,32 @@ action :setup do
     user instance.user
     group instance.group
     action :run
-    not_if { ::File.exist?(ca_crt_file) && ::File.exist?(ca_key_file) }
+    not_if { ::File.exist?(ca_crt_file_path) && ::File.exist?(ca_key_file_path) }
   end
 
-  server_crt_file = ::File.join(key_dir, "#{server_key_name}.crt")
-  server_key_file = ::File.join(key_dir, "#{server_key_name}.key")
+  server_crt_file_name = "#{key_name}.crt"
+  server_key_file_name = "#{key_name}.key"
 
-  bash "build key server at #{ca_dir}" do
-    cwd ca_dir
+  server_crt_file_path = ::File.join(key_dir_path, server_crt_file_name)
+  server_key_file_path = ::File.join(key_dir_path, server_key_file_name)
+
+  bash "build key server at #{ca_dir_path}" do
+    cwd ca_dir_path
     code <<-EOH
       source ./vars
-      ./build-key-server --batch #{server_key_name}
+      ./build-key-server --batch #{key_name}
       EOH
     user new_resource.user
     group new_resource.group
     action :run
-    not_if { ::File.exist?(server_crt_file) && ::File.exist?(server_key_file) }
+    not_if { ::File.exist?(server_crt_file_path) && ::File.exist?(server_key_file_path) }
   end
 
-  dh_key_file = ::File.join(key_dir, "dh#{new_resource.cert_key_size}.pem")
+  dh_key_file_name = "dh#{new_resource.key_size}.pem"
+  dh_key_file_path = ::File.join(key_dir_path, dh_key_file_name)
 
-  bash "build dh key at #{ca_dir}" do
-    cwd ca_dir
+  bash "build dh key at #{ca_dir_path}" do
+    cwd ca_dir_path
     code <<-EOH
       source ./vars
       ./build-dh
@@ -146,34 +160,35 @@ action :setup do
     user new_resource.user
     group new_resource.group
     action :run
-    not_if { ::File.exist?(dh_key_file) }
+    not_if { ::File.exist?(dh_key_file_path) }
   end
 
-  ta_key_file = ::File.join(key_dir, 'ta.key')
+  ta_key_file_name = 'ta.key'
+  ta_key_file_path = ::File.join(key_dir_path, ta_key_file_name)
 
-  bash "build ta key at #{ca_dir}" do
-    cwd ca_dir
+  bash "build ta key at #{ca_dir_path}" do
+    cwd ca_dir_path
     code <<-EOH
-      openvpn --genkey --secret #{server_key_dir}/ta.key
+      openvpn --genkey --secret #{key_dir_name}/#{ta_key_file_name}
       EOH
     user instance.user
     group instance.group
     action :run
-    not_if { ::File.exist?(ta_key_file) }
+    not_if { ::File.exist?(ta_key_file_path) }
   end
 
   openvpn_basedir = ::File.join('/etc', 'openvpn')
 
-  openvpn_server_basedir = ::File.join(openvpn_basedir, new_resource.name)
+  openvpn_service_basedir = ::File.join(openvpn_basedir, new_resource.name)
 
-  directory openvpn_server_basedir do
+  directory openvpn_service_basedir do
     owner instance.root
     group node['root_group']
     mode 0755
     action :create
   end
 
-  client_dir = ::File.join(openvpn_server_basedir, 'clients')
+  client_dir = ::File.join(openvpn_service_basedir, 'clients')
 
   directory client_dir do
     owner instance.root
@@ -183,15 +198,15 @@ action :setup do
   end
 
   [
-    'ca.crt',
-    'ca.key',
-    "#{server_key_name}.crt",
-    "#{server_key_name}.key",
-    "dh#{new_resource.cert_key_size}.pem",
-    "ta.key"
+    ca_crt_file_name,
+    ca_key_file_name,
+    server_crt_file_name,
+    server_key_file_name,
+    dh_key_file_name,
+    ta_key_file_name
   ].each do |file_name|
-    file ::File.join(openvpn_server_basedir, file_name) do
-      content lazy { ::IO.read(::File.join(key_dir, file_name)) }
+    file ::File.join(openvpn_service_basedir, file_name) do
+      content lazy { ::IO.read(::File.join(key_dir_path, file_name)) }
       owner instance.root
       group node['root_group']
       mode 0600
@@ -200,27 +215,31 @@ action :setup do
     end
   end
 
-  server_conf_file = ::File.join(openvpn_basedir, "#{new_resource.name}.conf")
+  service_conf_file_path = ::File.join(openvpn_basedir, "#{new_resource.name}.conf")
 
   require 'ip'
-  network = ::IP.new(new_resource.openvpn_network)
 
-  template server_conf_file do
+  openvpn_conf = new_resource.openvpn
+  openvpn_proto = openvpn_conf.fetch(:proto, 'udp')
+  openvpn_cipher = openvpn_conf.fetch(:cipher, 'AES-256-CBC')
+  openvpn_auth = openvpn_conf.fetch(:auth, 'SHA256')
+
+  template service_conf_file_path do
     cookbook 'vpn'
     source 'server.conf.erb'
     owner instance.root
     group node['root_group']
     variables(
-      port: new_resource.openvpn_port,
-      proto: new_resource.openvpn_proto,
-      ta_key: ::File.join(new_resource.name, 'ta.key'),
-      cipher: new_resource.openvpn_cipher,
-      auth: new_resource.openvpn_auth,
-      ca: ::File.join(new_resource.name, 'ca.crt'),
-      cert: ::File.join(new_resource.name, 'server.crt'),
-      key: ::File.join(new_resource.name, 'server.key'),
-      dh: ::File.join(new_resource.name, "dh#{new_resource.cert_key_size}.pem"),
-      network: network,
+      port: new_resource.port,
+      proto: openvpn_proto,
+      ta_key: ::File.join(new_resource.name, ta_key_file_name),
+      cipher: openvpn_cipher,
+      auth: openvpn_auth,
+      ca: ::File.join(new_resource.name, ca_crt_file_name),
+      cert: ::File.join(new_resource.name, server_crt_file_name),
+      key: ::File.join(new_resource.name, server_key_file_name),
+      dh: ::File.join(new_resource.name, dh_key_file_name),
+      network: ::IP.new(new_resource.network),
       ipp_file: ::File.join(new_resource.name, 'ipp.txt'),
       client_dir: ::File.join(new_resource.name, 'clients'),
       status_file: ::File.join('/var', 'log', 'openvpn', "#{new_resource.name}-status.log")
@@ -233,9 +252,80 @@ action :setup do
     action [:enable, :start]
   end
 
+  if new_resource.manage_firewall_rules
+    firewall_rule "openvpn-#{new_resource.name}" do
+      port new_resource.port
+      source '0.0.0.0/0'
+      protocol openvpn_proto.to_sym
+      position new_resource.firewall_filter_rule_position
+      command :allow
+    end
+  end
+
   # sysctl 'net.ipv4.ip_forward' do
   #   value 1
   #   action :apply
   # end
 
+  client_config_basedir = ::File.join(new_resource.basedir, 'client-config')
+
+  directory client_config_basedir do
+    owner new_resource.user
+    group new_resource.group
+    mode 0755
+    action :create
+  end
+
+  client_config_dir_path = ::File.join(client_config_basedir, new_resource.name)
+
+  directory client_config_dir_path do
+    owner new_resource.user
+    group new_resource.group
+    mode 0755
+    action :create
+  end
+
+  client_config_file_dir_path = ::File.join(client_config_dir_path, 'files')
+
+  directory client_config_dir_path do
+    owner new_resource.user
+    group new_resource.group
+    mode 0700
+    action :create
+  end
+
+  base_client_conf_file_name = 'base.conf'
+  base_client_conf_file_path = ::File.join(client_config_dir_path, base_client_conf_file_name)
+
+  template base_client_conf_file_path do
+    cookbook 'vpn'
+    source 'client.conf.erb'
+    owner new_resource.user
+    group new_resource.group
+    variables(
+      fqdn: new_resource.fqdn || instance.fqdn,
+      port: new_resource.port,
+      proto: openvpn_proto,
+      cipher: openvpn_cipher,
+      auth: openvpn_auth
+    )
+    mode 0644
+    action :create
+  end
+
+  make_config_script_path = ::File.join(client_config_dir_path, 'make_config')
+
+  template make_config_script_path do
+    cookbook 'vpn'
+    source 'make_config.sh.erb'
+    owner new_resource.user
+    group new_resource.group
+    variables(
+      key_dir: key_dir_path,
+      output_dir: client_config_file_dir_path,
+      base_config: base_client_conf_file_path
+    )
+    mode 0700
+    action :create
+  end
 end

@@ -1,0 +1,26 @@
+client
+dev tun
+proto <%= @proto %>
+remote <%= @fqdn %> <%= @port %>
+
+resolv-retry infinite
+nobind
+
+user nobody
+group nogroup
+
+persist-key
+persist-tun
+
+remote-cert-tls server
+
+cipher <%= @cipher %>
+auth <%= @auth %>
+
+key-direction 1
+
+verb 4
+
+# script-security 2
+# up /etc/openvpn/update-resolv-conf
+# down /etc/openvpn/update-resolv-conf
