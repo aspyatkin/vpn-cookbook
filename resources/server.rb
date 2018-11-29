@@ -287,7 +287,7 @@ action :setup do
 
   client_config_file_dir_path = ::File.join(client_config_dir_path, 'files')
 
-  directory client_config_dir_path do
+  directory client_config_file_dir_path do
     owner new_resource.user
     group new_resource.group
     mode 0700
@@ -313,11 +313,11 @@ action :setup do
     action :create
   end
 
-  make_config_script_path = ::File.join(client_config_dir_path, 'make_config')
+  make_config_script_path = ::File.join(client_config_dir_path, 'make-config')
 
   template make_config_script_path do
     cookbook 'vpn'
-    source 'make_config.sh.erb'
+    source 'make-config.sh.erb'
     owner new_resource.user
     group new_resource.group
     variables(
