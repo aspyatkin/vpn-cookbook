@@ -5,6 +5,7 @@ property :basedir, String, default: '/etc/chef-vpn'
 property :user, String, required: true
 property :group, String, required: true
 property :server, String, required: true
+property :ipv4_address, String, required: true
 
 default_action :create
 
@@ -48,5 +49,22 @@ action :create do
     group new_resource.group
     action :run
     not_if { ::File.exist?(client_ovpn_file_path) }
+  end
+
+  client_opts_file = ::File.join('/etc', 'openvpn', new_resource.server, 'clients', new_resource.name)
+
+  require 'ip'
+
+  template client_opts_file do
+    cookbook 'vpn'
+    source 'client_opts.erb'
+    owner instance.root
+    group node['root_group']
+    variables(
+      ipv4_address: new_resource.ipv4_address,
+      network: ::IP.new(resources("vpn_server[#{new_resource.server}]").network)
+    )
+    mode 0644
+    action :create
   end
 end

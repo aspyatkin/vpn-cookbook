@@ -1,0 +1,3 @@
+<% unless @ipv4_address.nil? || @network.nil? %>
+ifconfig-push <%= @ipv4_address %> <%= @network.netmask.to_s %>
+<% end %>

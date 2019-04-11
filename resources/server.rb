@@ -262,11 +262,6 @@ action :setup do
     end
   end
 
-  # sysctl 'net.ipv4.ip_forward' do
-  #   value 1
-  #   action :apply
-  # end
-
   client_config_basedir = ::File.join(new_resource.basedir, 'client-config')
 
   directory client_config_basedir do
