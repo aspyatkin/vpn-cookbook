@@ -9,7 +9,7 @@ property :certificate, Hash, default: {}
 
 property :key_size, Integer, default: 2048
 
-property :fqdn, [String, NilClass], default: nil
+property :fqdn, String, required: true
 property :port, Integer, default: 1194
 property :network, String, required: true
 property :openvpn, Hash, default: {}
@@ -20,21 +20,19 @@ property :firewall_filter_rule_position, Integer, default: 50
 default_action :setup
 
 action :setup do
-  %w(
+  %w[
     openvpn
     easy-rsa
-  ).each do |pkg_name|
+  ].each do |pkg_name|
     package pkg_name do
       action :install
     end
   end
 
-  instance = ::ChefCookbook::Instance::Helper.new(node)
-
   directory new_resource.basedir do
     owner new_resource.user
     group new_resource.group
-    mode 0755
+    mode 0o755
     recursive true
     action :create
   end
@@ -44,7 +42,7 @@ action :setup do
   directory server_basedir do
     owner new_resource.user
     group new_resource.group
-    mode 0755
+    mode 0o755
     action :create
   end
 
@@ -80,7 +78,7 @@ action :setup do
     replace_or_add "adjust #{key} in #{vars_file_path}" do
       path vars_file_path
       pattern ::Regexp.new("^export #{key}=.*$")
-      line "export #{key}=#{val.kind_of?(::Numeric) ? val.to_s : val.dump}"
+      line "export #{key}=#{val.is_a?(::Numeric) ? val.to_s : val.dump}"
       replace_only true
       ignore_missing false
       action :edit
@@ -105,11 +103,16 @@ action :setup do
     code <<-EOH
       source ./vars
       ./clean-all
-      EOH
-    user instance.user
-    group instance.group
+    EOH
+    user new_resource.user
+    group new_resource.group
     action :run
-    not_if { ::Dir.exist?(key_dir_path) && !::Dir.empty?(key_dir_path) }
+    not_if do
+      ::Dir.exist?(key_dir_path) && (
+        ::Gem::Version.new(RUBY_VERSION) >= ::Gem::Version.new('2.4.0') ?
+          ::Dir.empty?(key_dir_path) : (::Dir.entries(key_dir_path).size != 2)
+      )
+    end
   end
 
   ca_crt_file_name = 'ca.crt'
@@ -123,9 +126,9 @@ action :setup do
     code <<-EOH
       source ./vars
       ./build-ca --batch
-      EOH
-    user instance.user
-    group instance.group
+    EOH
+    user new_resource.user
+    group new_resource.group
     action :run
     not_if { ::File.exist?(ca_crt_file_path) && ::File.exist?(ca_key_file_path) }
   end
@@ -141,7 +144,7 @@ action :setup do
     code <<-EOH
       source ./vars
       ./build-key-server --batch #{key_name}
-      EOH
+    EOH
     user new_resource.user
     group new_resource.group
     action :run
@@ -156,7 +159,7 @@ action :setup do
     code <<-EOH
       source ./vars
       ./build-dh
-      EOH
+    EOH
     user new_resource.user
     group new_resource.group
     action :run
@@ -170,9 +173,9 @@ action :setup do
     cwd ca_dir_path
     code <<-EOH
       openvpn --genkey --secret #{key_dir_name}/#{ta_key_file_name}
-      EOH
-    user instance.user
-    group instance.group
+    EOH
+    user new_resource.user
+    group new_resource.group
     action :run
     not_if { ::File.exist?(ta_key_file_path) }
   end
@@ -182,18 +185,18 @@ action :setup do
   openvpn_service_basedir = ::File.join(openvpn_basedir, new_resource.name)
 
   directory openvpn_service_basedir do
-    owner instance.root
+    owner 'root'
     group node['root_group']
-    mode 0755
+    mode 0o755
     action :create
   end
 
   client_dir = ::File.join(openvpn_service_basedir, 'clients')
 
   directory client_dir do
-    owner instance.root
+    owner 'root'
     group node['root_group']
-    mode 0755
+    mode 0o755
     action :create
   end
 
@@ -206,16 +209,17 @@ action :setup do
     ta_key_file_name
   ].each do |file_name|
     file ::File.join(openvpn_service_basedir, file_name) do
-      content lazy { ::IO.read(::File.join(key_dir_path, file_name)) }
-      owner instance.root
+      content(lazy { ::IO.read(::File.join(key_dir_path, file_name)) })
+      owner 'root'
       group node['root_group']
-      mode 0600
+      mode 0o600
       sensitive true
       action :create
     end
   end
 
-  service_conf_file_path = ::File.join(openvpn_basedir, "#{new_resource.name}.conf")
+  service_conf_file_path = ::File.join(openvpn_basedir,
+                                       "#{new_resource.name}.conf")
 
   require 'ip'
 
@@ -224,10 +228,19 @@ action :setup do
   openvpn_cipher = openvpn_conf.fetch(:cipher, 'AES-256-CBC')
   openvpn_auth = openvpn_conf.fetch(:auth, 'SHA256')
 
+  log_dir = ::File.join('/var', 'log', 'openvpn')
+
+  directory log_dir do
+    owner 'root'
+    group node['root_group']
+    mode 0o755
+    action :create
+  end
+
   template service_conf_file_path do
     cookbook 'vpn'
     source 'server.conf.erb'
-    owner instance.root
+    owner 'root'
     group node['root_group']
     variables(
       port: new_resource.port,
@@ -242,14 +255,14 @@ action :setup do
       network: ::IP.new(new_resource.network),
       ipp_file: ::File.join(new_resource.name, 'ipp.txt'),
       client_dir: ::File.join(new_resource.name, 'clients'),
-      status_file: ::File.join('/var', 'log', 'openvpn', "#{new_resource.name}-status.log")
+      status_file: ::File.join(log_dir, "#{new_resource.name}-status.log")
     )
-    mode 0644
+    mode 0o644
     action :create
   end
 
   service "openvpn@#{new_resource.name}" do
-    action [:enable, :start]
+    action %i[enable start]
   end
 
   if new_resource.manage_firewall_rules
@@ -267,7 +280,7 @@ action :setup do
   directory client_config_basedir do
     owner new_resource.user
     group new_resource.group
-    mode 0755
+    mode 0o755
     action :create
   end
 
@@ -276,7 +289,7 @@ action :setup do
   directory client_config_dir_path do
     owner new_resource.user
     group new_resource.group
-    mode 0755
+    mode 0o755
     action :create
   end
 
@@ -285,12 +298,13 @@ action :setup do
   directory client_config_file_dir_path do
     owner new_resource.user
     group new_resource.group
-    mode 0700
+    mode 0o700
     action :create
   end
 
   base_client_conf_file_name = 'base.conf'
-  base_client_conf_file_path = ::File.join(client_config_dir_path, base_client_conf_file_name)
+  base_client_conf_file_path = ::File.join(client_config_dir_path,
+                                           base_client_conf_file_name)
 
   template base_client_conf_file_path do
     cookbook 'vpn'
@@ -298,13 +312,13 @@ action :setup do
     owner new_resource.user
     group new_resource.group
     variables(
-      fqdn: new_resource.fqdn || instance.fqdn,
+      fqdn: new_resource.fqdn,
       port: new_resource.port,
       proto: openvpn_proto,
       cipher: openvpn_cipher,
       auth: openvpn_auth
     )
-    mode 0644
+    mode 0o644
     action :create
   end
 
@@ -320,7 +334,7 @@ action :setup do
       output_dir: client_config_file_dir_path,
       base_config: base_client_conf_file_path
     )
-    mode 0700
+    mode 0o700
     action :create
   end
 end

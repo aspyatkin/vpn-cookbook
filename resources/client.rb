@@ -10,8 +10,6 @@ property :ipv4_address, String, required: true
 default_action :create
 
 action :create do
-  instance = ::ChefCookbook::Instance::Helper.new(node)
-
   ca_dir_path = ::File.join(new_resource.basedir, 'server', new_resource.server)
   key_dir_name = 'keys'
   key_dir_path = ::File.join(ca_dir_path, key_dir_name)
@@ -27,7 +25,7 @@ action :create do
     code <<-EOH
       source ./vars
       ./build-key --batch #{new_resource.name}
-      EOH
+    EOH
     user new_resource.user
     group new_resource.group
     action :run
@@ -44,7 +42,7 @@ action :create do
     cwd client_config_dir_path
     code <<-EOH
       ./make-config #{new_resource.name}
-      EOH
+    EOH
     user new_resource.user
     group new_resource.group
     action :run
@@ -58,13 +56,13 @@ action :create do
   template client_opts_file do
     cookbook 'vpn'
     source 'client_opts.erb'
-    owner instance.root
+    owner 'root'
     group node['root_group']
     variables(
       ipv4_address: new_resource.ipv4_address,
       network: ::IP.new(resources("vpn_server[#{new_resource.server}]").network)
     )
-    mode 0644
+    mode 0o644
     action :create
   end
 end
