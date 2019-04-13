@@ -110,7 +110,7 @@ action :setup do
     not_if do
       ::Dir.exist?(key_dir_path) && (
         ::Gem::Version.new(RUBY_VERSION) >= ::Gem::Version.new('2.4.0') ?
-          ::Dir.empty?(key_dir_path) : (::Dir.entries(key_dir_path).size != 2)
+          !::Dir.empty?(key_dir_path) : (::Dir.entries(key_dir_path).size != 2)
       )
     end
   end

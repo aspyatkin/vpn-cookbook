@@ -3,7 +3,7 @@ maintainer 'Alexander Pyatkin'
 maintainer_email 'aspyatkin@gmail.com'
 license 'MIT'
 description 'Install and configure OpenVPN'
-version '0.2.1'
+version '0.2.2'
 
 scm_url = 'https://github.com/aspyatkin/vpn-cookbook.git'
 source_url scm_url if respond_to?(:source_url)
