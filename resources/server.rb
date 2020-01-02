@@ -14,8 +14,12 @@ property :port, Integer, default: 1194
 property :network, String, required: true
 property :openvpn, Hash, default: {}
 
+property :redirect_gateway, [TrueClass, FalseClass], default: false
+property :bypass_dhcp, [TrueClass, FalseClass], default: true
+property :bypass_dns, [TrueClass, FalseClass], default: true
 property :manage_firewall_rules, [TrueClass, FalseClass], default: false
 property :firewall_filter_rule_position, Integer, default: 50
+property :firewall_nat_rule_position, Integer, default: 150
 
 default_action :setup
 
@@ -255,7 +259,10 @@ action :setup do
       network: ::IP.new(new_resource.network),
       ipp_file: ::File.join(new_resource.name, 'ipp.txt'),
       client_dir: ::File.join(new_resource.name, 'clients'),
-      status_file: ::File.join(log_dir, "#{new_resource.name}-status.log")
+      status_file: ::File.join(log_dir, "#{new_resource.name}-status.log"),
+      redirect_gateway: new_resource.redirect_gateway,
+      bypass_dhcp: new_resource.bypass_dhcp,
+      bypass_dns: new_resource.bypass_dns
     )
     mode 0o644
     action :create
@@ -266,12 +273,23 @@ action :setup do
   end
 
   if new_resource.manage_firewall_rules
-    firewall_rule "openvpn-#{new_resource.name}" do
-      port new_resource.port
-      source '0.0.0.0/0'
-      protocol openvpn_proto.to_sym
-      position new_resource.firewall_filter_rule_position
-      command :allow
+    with_run_context :root do
+      firewall_rule "openvpn-#{new_resource.name}" do
+        port new_resource.port
+        source '0.0.0.0/0'
+        protocol openvpn_proto.to_sym
+        position new_resource.firewall_filter_rule_position
+        command :allow
+      end
+
+      if new_resource.redirect_gateway
+        firewall_rule "openvpn-#{new_resource.name}-postrouting" do
+          source new_resource.network  # this line is needed to bypass setting raw IPv6 rule
+          raw lazy { "-A POSTROUTING -s #{new_resource.network} -o #{::ChefCookbook::VPN.public_interface} -j MASQUERADE" }
+          position new_resource.firewall_nat_rule_position
+          command :allow
+        end
+      end
     end
   end
 

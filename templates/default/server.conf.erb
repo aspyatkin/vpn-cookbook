@@ -27,6 +27,10 @@ key-direction 0
 cipher <%= @cipher %>
 auth <%= @auth %>
 
+<% if @redirect_gateway %>
+push "redirect-gateway def1<%= @bypass_dhcp ? ' bypass-dhcp' : '' %><%= @bypass_dns ? ' bypass-dns' : '' %>"
+<% end %>
+
 user nobody
 group nogroup
 
