@@ -62,112 +62,194 @@ action :setup do
 
   key_dir_name = 'keys'
   key_name = 'server'
-
   crt_details = new_resource.certificate
-  defaults = {
-    'KEY_COUNTRY' => crt_details.fetch(:country, 'US'),
-    'KEY_PROVINCE' => crt_details.fetch(:province, 'California'),
-    'KEY_CITY' => crt_details.fetch(:city, 'San Francisco'),
-    'KEY_ORG' => crt_details.fetch(:org, 'Acme Inc.'),
-    'KEY_EMAIL' => crt_details.fetch(:email, ''),
-    'KEY_OU' => crt_details.fetch(:ou, ''),
-    'KEY_NAME' => key_name,
-    'KEY_DIR' => "$EASY_RSA/#{key_dir_name}",
-    'KEY_SIZE' => new_resource.key_size
-  }
-
-  vars_file_path = ::File.join(ca_dir_path, 'vars')
-
-  defaults.each do |key, val|
-    replace_or_add "adjust #{key} in #{vars_file_path}" do
-      path vars_file_path
-      pattern ::Regexp.new("^export #{key}=.*$")
-      line "export #{key}=#{val.is_a?(::Numeric) ? val.to_s : val.dump}"
-      replace_only true
-      ignore_missing false
-      action :edit
-    end
-  end
-
-  if node['platform'] == 'ubuntu' && node['platform_version'].to_f >= 18.04
-    execute "Fix openssl.cnf at #{ca_dir_path}" do
-      cwd ca_dir_path
-      command 'cp ./openssl-1.0.0.cnf ./openssl.cnf'
-      user new_resource.user
-      group new_resource.group
-      action :run
-      not_if { ::File.exist?(::File.join(ca_dir_path, 'openssl.cnf')) }
-    end
-  end
-
-  key_dir_path = ::File.join(ca_dir_path, key_dir_name)
-
-  bash "clean CA key directory at #{ca_dir_path}" do
-    cwd ca_dir_path
-    code <<-EOH
-      source ./vars
-      ./clean-all
-    EOH
-    user new_resource.user
-    group new_resource.group
-    action :run
-    not_if do
-      ::Dir.exist?(key_dir_path) && (
-        ::Gem::Version.new(RUBY_VERSION) >= ::Gem::Version.new('2.4.0') ?
-          !::Dir.empty?(key_dir_path) : (::Dir.entries(key_dir_path).size != 2)
-      )
-    end
-  end
 
   ca_crt_file_name = 'ca.crt'
   ca_key_file_name = 'ca.key'
 
-  ca_crt_file_path = ::File.join(key_dir_path, ca_crt_file_name)
-  ca_key_file_path = ::File.join(key_dir_path, ca_key_file_name)
-
-  bash "initialize CA at #{ca_dir_path}" do
-    cwd ca_dir_path
-    code <<-EOH
-      source ./vars
-      ./build-ca --batch
-    EOH
-    user new_resource.user
-    group new_resource.group
-    action :run
-    not_if { ::File.exist?(ca_crt_file_path) && ::File.exist?(ca_key_file_path) }
-  end
-
   server_crt_file_name = "#{key_name}.crt"
   server_key_file_name = "#{key_name}.key"
 
-  server_crt_file_path = ::File.join(key_dir_path, server_crt_file_name)
-  server_key_file_path = ::File.join(key_dir_path, server_key_file_name)
+  key_dir_path = ::File.join(ca_dir_path, key_dir_name)
+  vars_file_path = ::File.join(ca_dir_path, 'vars')
 
-  bash "build key server at #{ca_dir_path}" do
-    cwd ca_dir_path
-    code <<-EOH
-      source ./vars
-      ./build-key-server --batch #{key_name}
-    EOH
-    user new_resource.user
-    group new_resource.group
-    action :run
-    not_if { ::File.exist?(server_crt_file_path) && ::File.exist?(server_key_file_path) }
-  end
+  if node['platform'] == 'ubuntu' && node['platform_version'].to_i == 20
+    defaults = {
+      'EASYRSA_REQ_COUNTRY' => crt_details.fetch(:country, 'US'),
+      'EASYRSA_REQ_PROVINCE' => crt_details.fetch(:province, 'California'),
+      'EASYRSA_REQ_CITY' => crt_details.fetch(:city, 'San Francisco'),
+      'EASYRSA_REQ_ORG' => crt_details.fetch(:org, 'Acme Inc.'),
+      'EASYRSA_REQ_EMAIL' => crt_details.fetch(:email, ''),
+      'EASYRSA_REQ_OU' => crt_details.fetch(:ou, ''),
+      'EASYRSA_REQ_CN' => crt_details.fetch(:ca, "#{key_name} CA"),
+      'EASYRSA_PKI' => "$PWD/#{key_dir_name}",
+      'EASYRSA_KEY_SIZE' => new_resource.key_size
+    }
 
-  dh_key_file_name = "dh#{new_resource.key_size}.pem"
-  dh_key_file_path = ::File.join(key_dir_path, dh_key_file_name)
+    defaults.each do |key, val|
+      replace_or_add "adjust #{key} in #{vars_file_path}" do
+        path vars_file_path
+        pattern ::Regexp.new("^#set_var #{key}.*$")
+        line "set_var #{key} #{val.is_a?(::Numeric) ? val.to_s : val.dump}"
+        replace_only true
+        ignore_missing false
+        action :edit
+      end
+    end
 
-  bash "build dh key at #{ca_dir_path}" do
-    cwd ca_dir_path
-    code <<-EOH
-      source ./vars
-      ./build-dh
-    EOH
-    user new_resource.user
-    group new_resource.group
-    action :run
-    not_if { ::File.exist?(dh_key_file_path) }
+    bash "init PKI directory at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        ./easyrsa init-pki
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if do
+        ::Dir.exist?(key_dir_path) && (
+          ::Gem::Version.new(RUBY_VERSION) >= ::Gem::Version.new('2.4.0') ?
+            !::Dir.empty?(key_dir_path) : (::Dir.entries(key_dir_path).size != 2)
+        )
+      end
+    end
+
+    ca_crt_file_path = ::File.join(key_dir_path, ca_crt_file_name)
+    ca_key_file_path = ::File.join(key_dir_path, 'private', ca_key_file_name)
+
+    bash "build CA at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        ./easyrsa --batch build-ca nopass
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(ca_crt_file_path) && ::File.exist?(ca_key_file_path) }
+    end
+
+    server_crt_file_path = ::File.join(key_dir_path, 'issued', server_crt_file_name)
+    server_key_file_path = ::File.join(key_dir_path, 'private', server_key_file_name)
+
+    bash "build key server at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        ./easyrsa --batch build-server-full #{key_name} nopass
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(server_crt_file_path) && ::File.exist?(server_key_file_path) }
+    end
+
+    dh_key_file_name = 'dh.pem'
+    dh_key_file_path = ::File.join(key_dir_path, dh_key_file_name)
+
+    bash "build dh key at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        ./easyrsa gen-dh
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(dh_key_file_path) }
+    end
+  else
+    defaults = {
+      'KEY_COUNTRY' => crt_details.fetch(:country, 'US'),
+      'KEY_PROVINCE' => crt_details.fetch(:province, 'California'),
+      'KEY_CITY' => crt_details.fetch(:city, 'San Francisco'),
+      'KEY_ORG' => crt_details.fetch(:org, 'Acme Inc.'),
+      'KEY_EMAIL' => crt_details.fetch(:email, ''),
+      'KEY_OU' => crt_details.fetch(:ou, ''),
+      'KEY_NAME' => key_name,
+      'KEY_DIR' => "$EASY_RSA/#{key_dir_name}",
+      'KEY_SIZE' => new_resource.key_size
+    }
+
+    defaults.each do |key, val|
+      replace_or_add "adjust #{key} in #{vars_file_path}" do
+        path vars_file_path
+        pattern ::Regexp.new("^export #{key}=.*$")
+        line "export #{key}=#{val.is_a?(::Numeric) ? val.to_s : val.dump}"
+        replace_only true
+        ignore_missing false
+        action :edit
+      end
+    end
+
+    if node['platform'] == 'ubuntu' && node['platform_version'].to_f >= 18.04
+      execute "Fix openssl.cnf at #{ca_dir_path}" do
+        cwd ca_dir_path
+        command 'cp ./openssl-1.0.0.cnf ./openssl.cnf'
+        user new_resource.user
+        group new_resource.group
+        action :run
+        not_if { ::File.exist?(::File.join(ca_dir_path, 'openssl.cnf')) }
+      end
+    end
+
+    bash "clean CA key directory at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        source ./vars
+        ./clean-all
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if do
+        ::Dir.exist?(key_dir_path) && (
+          ::Gem::Version.new(RUBY_VERSION) >= ::Gem::Version.new('2.4.0') ?
+            !::Dir.empty?(key_dir_path) : (::Dir.entries(key_dir_path).size != 2)
+        )
+      end
+    end
+
+    ca_crt_file_path = ::File.join(key_dir_path, ca_crt_file_name)
+    ca_key_file_path = ::File.join(key_dir_path, ca_key_file_name)
+
+    bash "initialize CA at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        source ./vars
+        ./build-ca --batch
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(ca_crt_file_path) && ::File.exist?(ca_key_file_path) }
+    end
+
+    server_crt_file_path = ::File.join(key_dir_path, server_crt_file_name)
+    server_key_file_path = ::File.join(key_dir_path, server_key_file_name)
+
+    bash "build key server at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        source ./vars
+        ./build-key-server --batch #{key_name}
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(server_crt_file_path) && ::File.exist?(server_key_file_path) }
+    end
+
+    dh_key_file_name = "dh#{new_resource.key_size}.pem"
+    dh_key_file_path = ::File.join(key_dir_path, dh_key_file_name)
+
+    bash "build dh key at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        source ./vars
+        ./build-dh
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(dh_key_file_path) }
+    end
   end
 
   ta_key_file_name = 'ta.key'
@@ -205,15 +287,15 @@ action :setup do
   end
 
   [
-    ca_crt_file_name,
-    ca_key_file_name,
-    server_crt_file_name,
-    server_key_file_name,
-    dh_key_file_name,
-    ta_key_file_name
-  ].each do |file_name|
-    file ::File.join(openvpn_service_basedir, file_name) do
-      content(lazy { ::IO.read(::File.join(key_dir_path, file_name)) })
+    ca_crt_file_path,
+    ca_key_file_path,
+    server_crt_file_path,
+    server_key_file_path,
+    dh_key_file_path,
+    ta_key_file_path
+  ].each do |file_path|
+    file ::File.join(openvpn_service_basedir, ::File.basename(file_path)) do
+      content(lazy { ::IO.read(file_path) })
       owner 'root'
       group node['root_group']
       mode 0o600
@@ -344,7 +426,7 @@ action :setup do
 
   template make_config_script_path do
     cookbook 'vpn'
-    source 'make-config.sh.erb'
+    source (node['platform'] == 'ubuntu' && node['platform_version'].to_i == 20) ? 'make-config-ubuntu-20.04.sh.erb' : 'make-config.sh.erb'
     owner new_resource.user
     group new_resource.group
     variables(

@@ -12,24 +12,41 @@ default_action :create
 action :create do
   ca_dir_path = ::File.join(new_resource.basedir, 'server', new_resource.server)
   key_dir_name = 'keys'
-  key_dir_path = ::File.join(ca_dir_path, key_dir_name)
 
   client_crt_file_name = "#{new_resource.name}.crt"
   client_key_file_name = "#{new_resource.name}.key"
 
-  client_crt_file_path = ::File.join(key_dir_path, client_crt_file_name)
-  client_key_file_path = ::File.join(key_dir_path, client_key_file_name)
+  key_dir_path = ::File.join(ca_dir_path, key_dir_name)
 
-  bash "generate client #{new_resource.name} key at #{ca_dir_path}" do
-    cwd ca_dir_path
-    code <<-EOH
-      source ./vars
-      ./build-key --batch #{new_resource.name}
-    EOH
-    user new_resource.user
-    group new_resource.group
-    action :run
-    not_if { ::File.exist?(client_crt_file_path) && ::File.exist?(client_key_file_path) }
+  if node['platform'] == 'ubuntu' && node['platform_version'].to_i == 20
+    client_crt_file_path = ::File.join(key_dir_path, 'issued', client_crt_file_name)
+    client_key_file_path = ::File.join(key_dir_path, 'private', client_key_file_name)
+
+    bash "generate client #{new_resource.name} key at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        ./easyrsa --batch build-client-full #{new_resource.name} nopass
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(client_crt_file_path) && ::File.exist?(client_key_file_path) }
+    end
+  else
+    client_crt_file_path = ::File.join(key_dir_path, client_crt_file_name)
+    client_key_file_path = ::File.join(key_dir_path, client_key_file_name)
+
+    bash "generate client #{new_resource.name} key at #{ca_dir_path}" do
+      cwd ca_dir_path
+      code <<-EOH
+        source ./vars
+        ./build-key --batch #{new_resource.name}
+      EOH
+      user new_resource.user
+      group new_resource.group
+      action :run
+      not_if { ::File.exist?(client_crt_file_path) && ::File.exist?(client_key_file_path) }
+    end
   end
 
   client_config_dir_path = ::File.join(new_resource.basedir, 'client-config', new_resource.server)
